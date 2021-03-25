@@ -12,6 +12,7 @@ use crate::util::*;
 ///
 /// Client is used to create Prio shares.
 #[derive(Debug)]
+#[cfg(not(feature = "without-encryption"))]
 pub struct Client {
     dimension: usize,
     points_f: Vec<Field>,
@@ -23,8 +24,19 @@ pub struct Client {
     public_key2: PublicKey,
 }
 
+#[cfg(feature = "without-encryption")]
+pub struct Client {
+    dimension: usize,
+    points_f: Vec<Field>,
+    points_g: Vec<Field>,
+    evals_f: Vec<Field>,
+    evals_g: Vec<Field>,
+    poly_mem: PolyAuxMemory,
+}
+
 impl Client {
     /// Construct a new Prio client
+    #[cfg(not(feature = "without-encryption"))]
     pub fn new(dimension: usize, public_key1: PublicKey, public_key2: PublicKey) -> Option<Self> {
         let n = (dimension + 1).next_power_of_two();
 
@@ -45,6 +57,25 @@ impl Client {
         })
     }
 
+    #[cfg(feature = "without-encryption")]
+    pub fn new(dimension: usize) -> Option<Self> {
+        let n = (dimension + 1).next_power_of_two();
+
+        if 2 * n > N_ROOTS as usize {
+            // too many elements for this field, not enough roots of unity
+            return None;
+        }
+
+        Some(Client {
+            dimension,
+            points_f: vector_with_length(n),
+            points_g: vector_with_length(n),
+            evals_f: vector_with_length(2 * n),
+            evals_g: vector_with_length(2 * n),
+            poly_mem: PolyAuxMemory::new(n),
+        })
+    }
+
     /// Construct a pair of encrypted shares based on the input data.
     pub fn encode_simple(&mut self, data: &[Field]) -> Result<(Vec<u8>, Vec<u8>), EncryptError> {
         let copy_data = |share_data: &mut [Field]| {
@@ -57,6 +88,7 @@ impl Client {
     ///
     /// This might be slightly more efficient on large vectors, because one can
     /// avoid copying the input data.
+    #[cfg(not(feature = "without-encryption"))]
     pub fn encode_with<F>(&mut self, init_function: F) -> Result<(Vec<u8>, Vec<u8>), EncryptError>
     where
         F: FnOnce(&mut [Field]),
@@ -86,10 +118,39 @@ impl Client {
         let encrypted_share2 = encrypt_share(&share2, &self.public_key2)?;
         Ok((encrypted_share1, encrypted_share2))
     }
+
+    #[cfg(feature = "without-encryption")]
+    pub fn encode_with<F>(&mut self, init_function: F) -> Result<(Vec<u8>, Vec<u8>), EncryptError>
+        where
+            F: FnOnce(&mut [Field]),
+    {
+        let mut proof = vector_with_length(proof_length(self.dimension));
+        // unpack one long vector to different subparts
+        let mut unpacked = unpack_proof_mut(&mut proof, self.dimension).unwrap();
+        // initialize the data part
+        init_function(&mut unpacked.data);
+        // fill in the rest
+        construct_proof(
+            &unpacked.data,
+            self.dimension,
+            &mut unpacked.f0,
+            &mut unpacked.g0,
+            &mut unpacked.h0,
+            &mut unpacked.points_h_packed,
+            self,
+        );
+
+        // use prng to share the proof: share2 is the PRNG seed, and proof is mutated
+        // in-place
+        let share2 = crate::prng::secret_share(&mut proof);
+        let share1 = serialize(&proof);
+        Ok((share1, share2))
+    }
 }
 
 /// Convenience function if one does not want to reuse
 /// [`Client`](struct.Client.html).
+#[cfg(not(feature = "without-encryption"))]
 pub fn encode_simple(
     data: &[Field],
     public_key1: PublicKey,
@@ -97,6 +158,15 @@ pub fn encode_simple(
 ) -> Option<(Vec<u8>, Vec<u8>)> {
     let dimension = data.len();
     let mut client_memory = Client::new(dimension, public_key1, public_key2)?;
+    client_memory.encode_simple(data).ok()
+}
+
+#[cfg(feature = "without-encryption")]
+pub fn encode_simple(
+    data: &[Field],
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let dimension = data.len();
+    let mut client_memory = Client::new(dimension)?;
     client_memory.encode_simple(data).ok()
 }
 
@@ -173,6 +243,7 @@ fn construct_proof(
 }
 
 #[test]
+#[cfg(not(feature = "without-encryption"))]
 fn test_encode() {
     let pub_key1 = PublicKey::from_base64(
         "BIl6j+J6dYttxALdjISDv6ZI4/VWVEhUzaS05LgrsfswmbLOgNt9HUC2E0w+9RqZx3XMkdEHBHfNuCSMpOwofVQ=",
@@ -189,5 +260,16 @@ fn test_encode() {
         .map(|x| Field::from(*x))
         .collect::<Vec<Field>>();
     let encoded_shares = encode_simple(&data, pub_key1, pub_key2);
+    assert_eq!(encoded_shares.is_some(), true);
+}
+
+#[cfg(feature = "without-encryption")]
+fn test_encode() {
+    let data_u32 = [0u32, 1, 0, 1, 1, 0, 0, 0, 1];
+    let data = data_u32
+        .iter()
+        .map(|x| Field::from(*x))
+        .collect::<Vec<Field>>();
+    let encoded_shares = encode_simple(&data);
     assert_eq!(encoded_shares.is_some(), true);
 }

@@ -48,12 +48,21 @@ impl ValidationMemory {
 
 /// Main workhorse of the server.
 #[derive(Debug)]
+#[cfg(not(feature = "without-encryption"))]
 pub struct Server {
     dimension: usize,
     is_first_server: bool,
     accumulator: Vec<Field>,
     validation_mem: ValidationMemory,
     private_key: PrivateKey,
+}
+
+#[cfg(feature = "without-encryption")]
+pub struct Server {
+    dimension: usize,
+    is_first_server: bool,
+    accumulator: Vec<Field>,
+    validation_mem: ValidationMemory,
 }
 
 impl Server {
@@ -63,6 +72,7 @@ impl Server {
     ///  * `dimension`: the number of elements in the aggregation vector.
     ///  * `is_first_server`: only one of the servers should have this true.
     ///  * `private_key`: the private key for decrypting the share of the proof.
+    #[cfg(not(feature = "without-encryption"))]
     pub fn new(dimension: usize, is_first_server: bool, private_key: PrivateKey) -> Server {
         Server {
             dimension,
@@ -73,9 +83,30 @@ impl Server {
         }
     }
 
+    #[cfg(feature = "without-encryption")]
+    pub fn new(dimension: usize, is_first_server: bool) -> Server {
+        Server {
+            dimension,
+            is_first_server,
+            accumulator: vector_with_length(dimension),
+            validation_mem: ValidationMemory::new(dimension),
+        }
+    }
+
     /// Decrypt and deserialize
+    #[cfg(not(feature = "without-encryption"))]
     fn deserialize_share(&self, encrypted_share: &[u8]) -> Result<Vec<Field>, ServerError> {
         let share = decrypt_share(encrypted_share, &self.private_key)?;
+        Ok(if self.is_first_server {
+            deserialize(&share)
+        } else {
+            let len = proof_length(self.dimension);
+            extract_share_from_seed(len, &share)
+        })
+    }
+
+    #[cfg(feature = "without-encryption")]
+    fn deserialize_share(&self, share: &[u8]) -> Result<Vec<Field>, ServerError> {
         Ok(if self.is_first_server {
             deserialize(&share)
         } else {
