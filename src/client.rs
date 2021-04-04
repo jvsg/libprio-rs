@@ -15,6 +15,7 @@ use crate::util::*;
 #[cfg(not(feature = "without-encryption"))]
 pub struct Client {
     dimension: usize,
+    server_count: usize,
     points_f: Vec<Field>,
     points_g: Vec<Field>,
     evals_f: Vec<Field>,
@@ -27,6 +28,7 @@ pub struct Client {
 #[cfg(feature = "without-encryption")]
 pub struct Client {
     dimension: usize,
+    server_count: usize,
     points_f: Vec<Field>,
     points_g: Vec<Field>,
     evals_f: Vec<Field>,
@@ -37,7 +39,7 @@ pub struct Client {
 impl Client {
     /// Construct a new Prio client
     #[cfg(not(feature = "without-encryption"))]
-    pub fn new(dimension: usize, public_key1: PublicKey, public_key2: PublicKey) -> Option<Self> {
+    pub fn new(dimension: usize, server_count: usize, public_key1: PublicKey, public_key2: PublicKey) -> Option<Self> {
         let n = (dimension + 1).next_power_of_two();
 
         if 2 * n > N_ROOTS as usize {
@@ -47,6 +49,7 @@ impl Client {
 
         Some(Client {
             dimension,
+            server_count,
             points_f: vector_with_length(n),
             points_g: vector_with_length(n),
             evals_f: vector_with_length(2 * n),
@@ -58,7 +61,7 @@ impl Client {
     }
 
     #[cfg(feature = "without-encryption")]
-    pub fn new(dimension: usize) -> Option<Self> {
+    pub fn new(dimension: usize, server_count: usize) -> Option<Self> {
         let n = (dimension + 1).next_power_of_two();
 
         if 2 * n > N_ROOTS as usize {
@@ -68,6 +71,7 @@ impl Client {
 
         Some(Client {
             dimension,
+            server_count,
             points_f: vector_with_length(n),
             points_g: vector_with_length(n),
             evals_f: vector_with_length(2 * n),
@@ -77,19 +81,19 @@ impl Client {
     }
 
     /// Construct a pair of encrypted shares based on the input data.
-    pub fn encode_simple(&mut self, data: &[Field]) -> Result<(Vec<u8>, Vec<u8>), EncryptError> {
+    pub fn encode_simple(&mut self, data: &[Field]) -> Result<(Vec<u8>, Vec<Vec<u8>>), EncryptError> {
         let copy_data = |share_data: &mut [Field]| {
             share_data[..].clone_from_slice(data);
         };
         self.encode_with(copy_data)
     }
 
-    /// Construct a pair of encrypted shares using a initilization function.
+    /// Construct a series of encrypted shares using a initilization function.
     ///
     /// This might be slightly more efficient on large vectors, because one can
     /// avoid copying the input data.
     #[cfg(not(feature = "without-encryption"))]
-    pub fn encode_with<F>(&mut self, init_function: F) -> Result<(Vec<u8>, Vec<u8>), EncryptError>
+    pub fn encode_with<F>(&mut self, init_function: F) -> Result<(Vec<u8>, Vec<(Vec<u8>)>), EncryptError>
     where
         F: FnOnce(&mut [Field]),
     {
@@ -111,16 +115,16 @@ impl Client {
 
         // use prng to share the proof: share2 is the PRNG seed, and proof is mutated
         // in-place
-        let share2 = crate::prng::secret_share(&mut proof);
+        let share2 = crate::prng::secret_share(&mut proof, self.server_count);
         let share1 = serialize(&proof);
         // encrypt shares with respective keys
         let encrypted_share1 = encrypt_share(&share1, &self.public_key1)?;
-        let encrypted_share2 = encrypt_share(&share2, &self.public_key2)?;
-        Ok((encrypted_share1, encrypted_share2))
+        //let encrypted_share2 = encrypt_share(&share2, &self.public_key2)?;
+        Ok((encrypted_share1, share2))
     }
 
     #[cfg(feature = "without-encryption")]
-    pub fn encode_with<F>(&mut self, init_function: F) -> Result<(Vec<u8>, Vec<u8>), EncryptError>
+    pub fn encode_with<F>(&mut self, init_function: F) -> Result<(Vec<u8>, Vec<Vec<u8>>), EncryptError>
         where
             F: FnOnce(&mut [Field]),
     {
@@ -140,11 +144,11 @@ impl Client {
             self,
         );
 
-        // use prng to share the proof: share2 is the PRNG seed, and proof is mutated
-        // in-place
-        let share2 = crate::prng::secret_share(&mut proof);
-        let share1 = serialize(&proof);
-        Ok((share1, share2))
+        // use prng to share the proof: seed_shares is the vector of shares of PRNG seed,
+        // and proof_share is mutated in-place
+        let seed_shares = crate::prng::secret_share(&mut proof, self.server_count);
+        let proof_share = serialize(&proof);
+        Ok((proof_share, seed_shares))
     }
 }
 
@@ -153,20 +157,22 @@ impl Client {
 #[cfg(not(feature = "without-encryption"))]
 pub fn encode_simple(
     data: &[Field],
+    server_count: usize,
     public_key1: PublicKey,
     public_key2: PublicKey,
-) -> Option<(Vec<u8>, Vec<u8>)> {
+) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
     let dimension = data.len();
-    let mut client_memory = Client::new(dimension, public_key1, public_key2)?;
+    let mut client_memory = Client::new(dimension, server_count, public_key1, public_key2)?;
     client_memory.encode_simple(data).ok()
 }
 
 #[cfg(feature = "without-encryption")]
 pub fn encode_simple(
     data: &[Field],
-) -> Option<(Vec<u8>, Vec<u8>)> {
+    server_count: usize,
+) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
     let dimension = data.len();
-    let mut client_memory = Client::new(dimension)?;
+    let mut client_memory = Client::new(dimension, server_count)?;
     client_memory.encode_simple(data).ok()
 }
 
@@ -266,10 +272,11 @@ fn test_encode() {
 #[cfg(feature = "without-encryption")]
 fn test_encode() {
     let data_u32 = [0u32, 1, 0, 1, 1, 0, 0, 0, 1];
+    let server_count = 3;
     let data = data_u32
         .iter()
         .map(|x| Field::from(*x))
         .collect::<Vec<Field>>();
-    let encoded_shares = encode_simple(&data);
+    let encoded_shares = encode_simple(&data, server_count);
     assert_eq!(encoded_shares.is_some(), true);
 }

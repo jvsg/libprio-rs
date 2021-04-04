@@ -6,14 +6,15 @@ use aes_ctr::stream_cipher::generic_array::GenericArray;
 use aes_ctr::stream_cipher::NewStreamCipher;
 use aes_ctr::stream_cipher::SyncStreamCipher;
 use aes_ctr::Aes128Ctr;
-use rand::RngCore;
+use rand::{RngCore, Rng, thread_rng};
 use std::convert::TryInto;
+use rand::seq::SliceRandom;
 
 const BLOCK_SIZE: usize = 16;
 const MAXIMUM_BUFFER_SIZE_IN_BLOCKS: usize = 4096;
 pub const SEED_LENGTH: usize = 2 * BLOCK_SIZE;
 
-pub fn secret_share(share1: &mut [Field]) -> Vec<u8> {
+pub fn secret_share(share1: &mut [Field], server_count: usize) -> Vec<Vec<u8>> {
     // get prng array
     let (data, seed) = random_field_and_seed(share1.len());
 
@@ -22,11 +23,47 @@ pub fn secret_share(share1: &mut [Field]) -> Vec<u8> {
         *s1 -= *d;
     }
 
-    seed
+    let seeds = split_seed_into_shares(server_count, seed);
+    seeds
 }
 
 pub fn extract_share_from_seed(length: usize, seed: &[u8]) -> Vec<Field> {
     random_field_from_seed(seed, length)
+}
+
+fn split(n: usize, s: &u8) -> Vec<u8> {
+    let mut d: u8 = 0;
+    //println!("The original value is: {} ", *s);
+    let mut r = vec![0u8; n];
+    d = *s;
+    for i in 0..n {
+        if d == 0 {
+            break;
+        }
+        if i == n -1 {
+            r[i] = d;
+        }
+        else {
+            r[i] = rand::thread_rng().gen_range(0, d);
+            d -= r[i];
+        }
+    }
+
+    r.shuffle(&mut thread_rng());
+    //println!("The splitted value is: {:?} ", r);
+    r
+}
+
+fn split_seed_into_shares(server_count: usize, seed: Vec<u8>) -> Vec<Vec<u8>> {
+    let mut seeds = vec![vec![0u8; SEED_LENGTH]; server_count - 1];
+    for (i, s) in seed.iter().enumerate() {
+        let mm = split(server_count - 1, s);
+        for (j, m) in mm.iter().enumerate() {
+            seeds[j][i] += m;
+        }
+    }
+
+    seeds
 }
 
 fn random_field_and_seed(length: usize) -> (Vec<Field>, Vec<u8>) {
