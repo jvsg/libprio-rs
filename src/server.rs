@@ -52,6 +52,7 @@ impl ValidationMemory {
 pub struct Server {
     dimension: usize,
     is_first_server: bool,
+    server_count: usize,
     accumulator: Vec<Field>,
     validation_mem: ValidationMemory,
     private_key: PrivateKey,
@@ -61,6 +62,7 @@ pub struct Server {
 pub struct Server {
     dimension: usize,
     is_first_server: bool,
+    server_count: usize,
     accumulator: Vec<Field>,
     validation_mem: ValidationMemory,
 }
@@ -71,12 +73,14 @@ impl Server {
     /// Params:
     ///  * `dimension`: the number of elements in the aggregation vector.
     ///  * `is_first_server`: only one of the servers should have this true.
+    ///  * `server_count`: the total number of servers in the system
     ///  * `private_key`: the private key for decrypting the share of the proof.
     #[cfg(not(feature = "without-encryption"))]
-    pub fn new(dimension: usize, is_first_server: bool, private_key: PrivateKey) -> Server {
+    pub fn new(dimension: usize, is_first_server: bool, server_count: usize, private_key: PrivateKey) -> Server {
         Server {
             dimension,
             is_first_server,
+            server_count,
             accumulator: vector_with_length(dimension),
             validation_mem: ValidationMemory::new(dimension),
             private_key,
@@ -84,10 +88,11 @@ impl Server {
     }
 
     #[cfg(feature = "without-encryption")]
-    pub fn new(dimension: usize, is_first_server: bool) -> Server {
+    pub fn new(dimension: usize, is_first_server: bool, server_count: usize) -> Server {
         Server {
             dimension,
             is_first_server,
+            server_count,
             accumulator: vector_with_length(dimension),
             validation_mem: ValidationMemory::new(dimension),
         }

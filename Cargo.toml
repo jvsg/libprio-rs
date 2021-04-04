@@ -24,6 +24,3 @@ num-bigint = "0.4.0"
 
 [features]
 without-encryption = []
-
-[[example]]
-name = "sum"
